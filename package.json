@@ -1,0 +1,45 @@
+{
+  "name": "smart-ai-cache",
+  "version": "1.0.0",
+  "description": "A lightweight, intelligent caching middleware for AI responses.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "build": "tsc",
+    "docs": "typedoc --out docs src/index.ts"
+  },
+  "keywords": [
+    "ai",
+    "cache",
+    "openai",
+    "anthropic",
+    "google",
+    "gemini",
+    "claude",
+    "gpt"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/preset-env": "^7.28.0",
+    "@babel/preset-typescript": "^7.27.1",
+    "@types/crypto-js": "^4.2.2",
+    "@types/ioredis": "^4.28.10",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.13",
+    "babel-jest": "^30.0.4",
+    "jest": "^30.0.4",
+    "ts-jest": "^29.4.0",
+    "typedoc": "^0.28.7",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.56.0",
+    "@google/generative-ai": "^0.24.1",
+    "crypto-js": "^4.2.0",
+    "ioredis": "^5.6.1",
+    "openai": "^5.9.0"
+  }
+}
