@@ -1,1 +1,35 @@
-node_modules
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Optional npm cache directory
+.npm/
+
+# Optional REPL history
+.node_repl_history
+
+# dotenv environment variables file
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# TypeScript build output
+dist/
+
+# Jest cache
+.jest/
+
+# TypeDoc documentation output
+docs/
+
+# Branching strategy document (for local reference only)
+BRANCHING_STRATEGY.md
