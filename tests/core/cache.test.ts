@@ -8,7 +8,7 @@ describe('AIResponseCache', () => {
   });
 
   it('should cache a response', async () => {
-    const fn = jest.fn().mockResolvedValue('response');
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
     const result1 = await cache.wrap(fn, { provider: 'test', model: 'test-model' });
     const result2 = await cache.wrap(fn, { provider: 'test', model: 'test-model' });
 
@@ -18,7 +18,7 @@ describe('AIResponseCache', () => {
   });
 
   it('should not use cache for different prompts', async () => {
-    const fn = jest.fn().mockResolvedValue('response');
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
     await cache.wrap(fn, { provider: 'test', model: 'test-model', prompt: 'prompt1' });
     await cache.wrap(fn, { provider: 'test', model: 'test-model', prompt: 'prompt2' });
 
@@ -26,7 +26,7 @@ describe('AIResponseCache', () => {
   });
 
   it('should respect TTL', async () => {
-    const fn = jest.fn().mockResolvedValue('response');
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
     await cache.wrap(fn, { provider: 'test', model: 'test-model' });
 
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -37,7 +37,7 @@ describe('AIResponseCache', () => {
   });
 
   it('should correctly report stats', async () => {
-    const fn = jest.fn().mockResolvedValue('response');
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
     await cache.wrap(fn, { provider: 'test', model: 'test-model' });
     await cache.wrap(fn, { provider: 'test', model: 'test-model' });
 

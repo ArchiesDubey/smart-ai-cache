@@ -13,7 +13,7 @@ export class AIResponseCache {
   }
 
   async wrap<T>(
-    fn: () => Promise<T>,
+    fn: () => Promise<{ value: T; tokenCount?: number; cost?: number }>,
     options: {
       provider: string;
       model: string;
@@ -44,7 +44,7 @@ export class AIResponseCache {
 
     this.stats.cacheMisses++;
     this.stats.hitRate = (this.stats.cacheHits / this.stats.totalRequests) * 100;
-    const value = await fn();
+    const { value, tokenCount = 0, cost = 0 } = await fn();
     const endTime = Date.now();
     this.stats.averageResponseTime = (this.stats.averageResponseTime * (this.stats.totalRequests - 1) + (endTime - startTime)) / this.stats.totalRequests;
 
@@ -55,8 +55,8 @@ export class AIResponseCache {
       ttl: options.ttl || this.config.ttl,
       provider: options.provider,
       model: options.model,
-      tokenCount: 0, // This will be updated by provider-specific logic
-      cost: 0, // This will be updated by provider-specific logic
+      tokenCount,
+      cost,
     };
 
     this.cache.set(key, newEntry);

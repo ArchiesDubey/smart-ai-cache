@@ -24,11 +24,10 @@ export class GoogleCache extends AIResponseCache {
     return super.wrap(
       async () => {
         const response = await generativeModel.generateContent(params);
-        const entry = this.getCacheEntry(super.generateKey('google', modelName, contents, rest));
         // Note: Google's SDK does not provide token usage directly in the response.
         // A separate call to countTokens would be needed, which adds latency.
         // For this MVP, we will not implement cost calculation for Google models.
-        return response;
+        return { value: response, tokenCount: 0, cost: 0 };
       },
       {
         provider: 'google',

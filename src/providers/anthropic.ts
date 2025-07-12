@@ -23,15 +23,16 @@ export class AnthropicCache extends AIResponseCache {
     return super.wrap(
       async () => {
         const response = await this.anthropic.messages.create(params) as Anthropic.Message;
-        const entry = this.getCacheEntry(super.generateKey('anthropic', model, messages, rest));
-        if (entry) {
+        let tokenCount = 0;
+        let cost = 0;
+        if (response.usage) {
           const pricing = ANTHROPIC_PRICING[model];
           if (pricing) {
-            entry.tokenCount = response.usage.input_tokens + response.usage.output_tokens;
-            entry.cost = response.usage.input_tokens * pricing.input + response.usage.output_tokens * pricing.output;
+            tokenCount = response.usage.input_tokens + response.usage.output_tokens;
+            cost = response.usage.input_tokens * pricing.input + response.usage.output_tokens * pricing.output;
           }
         }
-        return response;
+        return { value: response, tokenCount, cost };
       },
       {
         provider: 'anthropic',

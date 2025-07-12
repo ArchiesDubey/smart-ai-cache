@@ -24,15 +24,16 @@ export class OpenAICache extends AIResponseCache {
     return super.wrap(
       async () => {
         const response = await this.openai.chat.completions.create(params) as OpenAI.ChatCompletion;
-        const entry = this.getCacheEntry(super.generateKey('openai', model, messages, rest));
-        if (entry && response.usage) {
+        let tokenCount = 0;
+        let cost = 0;
+        if (response.usage) {
           const pricing = OPENAI_PRICING[model];
           if (pricing) {
-            entry.tokenCount = response.usage.total_tokens;
-            entry.cost = response.usage.prompt_tokens * pricing.input + response.usage.completion_tokens * pricing.output;
+            tokenCount = response.usage.total_tokens;
+            cost = response.usage.prompt_tokens * pricing.input + response.usage.completion_tokens * pricing.output;
           }
         }
-        return response;
+        return { value: response, tokenCount, cost };
       },
       {
         provider: 'openai',
