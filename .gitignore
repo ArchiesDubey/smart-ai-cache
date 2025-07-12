@@ -33,3 +33,6 @@ docs/
 
 # Branching strategy document (for local reference only)
 BRANCHING_STRATEGY.md
+
+# Security report (for local reference only)
+SECURITY_REPORT.md
