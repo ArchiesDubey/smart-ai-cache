@@ -100,7 +100,7 @@ const customCache = new AIResponseCache({
 
 ## 5. API Reference
 
-For a complete and detailed API reference, including all classes, methods, and interfaces, please refer to the [TypeDoc documentation](./docs/index.html).
+For a complete and detailed API reference, including all classes, methods, and interfaces, please refer to the [TypeDoc documentation](https://archiesdubey.github.io/smart-ai-cache/).
 
 ## 6. Provider-Specific Usage
 
