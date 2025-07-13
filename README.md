@@ -8,6 +8,7 @@ A lightweight, intelligent caching middleware for AI responses, designed to redu
 
 ## 1.Overview 
 With growing usage of numerous AI Agents in our workflow, it often becomes hard to curtail the runaway costs associated with such workflows.This npm package is an attempt to reign in the bills
+
 `smart-ai-cache` is an NPM package targeting Node.js developers building AI-powered applications. Its primary goal is to reduce API costs and improve response times for repetitive Large Language Model (LLM) queries.
 
 ### Key Value Propositions
