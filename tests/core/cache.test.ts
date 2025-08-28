@@ -4,7 +4,12 @@ describe('AIResponseCache', () => {
   let cache: AIResponseCache;
 
   beforeEach(() => {
-    cache = new AIResponseCache({ ttl: 1 });
+    cache = new AIResponseCache({ ttl: 1, storage: 'memory' });
+  });
+
+  afterEach(async () => {
+    await cache.clear();
+    await cache.disconnect();
   });
 
   it('should cache a response', async () => {
@@ -46,5 +51,147 @@ describe('AIResponseCache', () => {
     expect(stats.cacheHits).toBe(1);
     expect(stats.cacheMisses).toBe(1);
     expect(stats.hitRate).toBe(50);
+  });
+
+  it('should validate configuration parameters', () => {
+    expect(() => new AIResponseCache({ ttl: -1 })).toThrow('TTL must be positive');
+    expect(() => new AIResponseCache({ maxSize: 0 })).toThrow('Max size must be positive');
+    expect(() => new AIResponseCache({ storage: 'invalid' as any })).toThrow('Storage must be either "memory" or "redis"');
+  });
+
+  it('should validate wrap options', async () => {
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
+    
+    await expect(cache.wrap(fn, { provider: '', model: 'test-model' })).rejects.toThrow('Provider is required and must be a string');
+    await expect(cache.wrap(fn, { provider: 'test', model: '' })).rejects.toThrow('Model is required and must be a string');
+    await expect(cache.wrap(fn, { provider: 'test', model: 'test-model', ttl: -1 })).rejects.toThrow('TTL must be a positive number');
+  });
+
+  it('should handle API call errors with retry logic', async () => {
+    let callCount = 0;
+    const fn = jest.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount < 3) {
+        return Promise.reject(new Error('API error'));
+      }
+      return Promise.resolve({ value: 'success', tokenCount: 0, cost: 0 });
+    });
+
+    const result = await cache.wrap(fn, { provider: 'test', model: 'test-model' });
+    
+    expect(result).toBe('success');
+    expect(fn).toHaveBeenCalledTimes(3); // 2 retries + 1 success
+  });
+
+  it('should fail after max retries', async () => {
+    const fn = jest.fn().mockRejectedValue(new Error('Persistent API error'));
+
+    await expect(cache.wrap(fn, { provider: 'test', model: 'test-model' })).rejects.toThrow('Persistent API error');
+    expect(fn).toHaveBeenCalledTimes(3); // Max retries
+  });
+
+  it('should support pattern-based cache invalidation', async () => {
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
+    
+    // Cache some entries
+    await cache.wrap(fn, { provider: 'openai', model: 'gpt-4', prompt: 'test1' });
+    await cache.wrap(fn, { provider: 'openai', model: 'gpt-3.5', prompt: 'test2' });
+    await cache.wrap(fn, { provider: 'anthropic', model: 'claude-3', prompt: 'test3' });
+
+    expect(await cache.getCacheSize()).toBe(3);
+
+    // Delete by pattern - should match openai entries
+    const deletedCount = await cache.deleteByPattern('*openai*');
+    
+    expect(deletedCount).toBe(2);
+    expect(await cache.getCacheSize()).toBe(1);
+  });
+
+  it('should handle cache storage errors gracefully', async () => {
+    // Create a cache that will fail during storage operations
+    const cacheWithRedis = new AIResponseCache({ 
+      storage: 'redis', 
+      redisOptions: { host: 'invalid-host', port: 9999, connectTimeout: 100, lazyConnect: true }
+    });
+
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
+    
+    // Should not throw, just continue with API call
+    const result = await cacheWithRedis.wrap(fn, { provider: 'test', model: 'test-model' });
+    
+    expect(result).toBe('response');
+    expect(fn).toHaveBeenCalledTimes(1);
+    
+    await cacheWithRedis.disconnect();
+  }, 10000);
+
+  it('should clear cache', async () => {
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
+    await cache.wrap(fn, { provider: 'test', model: 'test-model' });
+
+    expect(await cache.getCacheSize()).toBe(1);
+    
+    await cache.clear();
+    
+    expect(await cache.getCacheSize()).toBe(0);
+  });
+
+  it('should delete specific cache entries', async () => {
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
+    await cache.wrap(fn, { provider: 'test', model: 'test-model' });
+
+    const key = cache.generateKey('test', 'test-model', undefined, undefined);
+    
+    expect(await cache.has(key)).toBe(true);
+    
+    const deleted = await cache.delete(key);
+    
+    expect(deleted).toBe(true);
+    expect(await cache.has(key)).toBe(false);
+  });
+
+  it('should handle Redis configuration errors and fallback to memory', () => {
+    // This should create a cache that falls back to memory storage
+    const cacheWithBadRedis = new AIResponseCache({ 
+      storage: 'redis',
+      // Missing redisOptions should cause fallback
+    });
+    
+    // Should not throw, just fallback to memory storage
+    expect(cacheWithBadRedis).toBeDefined();
+  });
+
+  it('should handle provider stats initialization correctly', async () => {
+    const fn1 = jest.fn().mockResolvedValue({ value: 'response1', tokenCount: 10, cost: 0.01 });
+    const fn2 = jest.fn().mockResolvedValue({ value: 'response2', tokenCount: 15, cost: 0.02 });
+    
+    await cache.wrap(fn1, { provider: 'provider1', model: 'model1' });
+    await cache.wrap(fn2, { provider: 'provider2', model: 'model1' });
+    
+    const stats = cache.getStats();
+    expect(stats.byProvider.provider1).toBeDefined();
+    expect(stats.byProvider.provider2).toBeDefined();
+    expect(stats.byProvider.provider1.requests).toBe(1);
+    expect(stats.byProvider.provider2.requests).toBe(1);
+  });
+
+  it('should calculate stats correctly with costs', async () => {
+    const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 100, cost: 0.05 });
+    
+    // First call - cache miss
+    await cache.wrap(fn, { provider: 'test', model: 'test-model' });
+    // Second call - cache hit
+    await cache.wrap(fn, { provider: 'test', model: 'test-model' });
+    
+    const stats = cache.getStats();
+    expect(stats.totalCostSaved).toBe(0.05); // Cost saved from cache hit
+    expect(stats.byProvider.test.costSaved).toBe(0.05);
+  });
+
+  it('should handle empty redisOptions validation', () => {
+    expect(() => new AIResponseCache({ 
+      storage: 'redis', 
+      redisOptions: {} 
+    })).toThrow('Redis options are required when using Redis storage');
   });
 });

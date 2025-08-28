@@ -28,6 +28,9 @@ dist/
 # Jest cache
 .jest/
 
+# Coverage reports
+coverage/
+
 # TypeDoc documentation output
 docs/
 
@@ -39,3 +42,6 @@ SECURITY_REPORT.md
 
 //Low-Devel-Design
 LLD.md
+
+//.DS_Store
+.DS_Store

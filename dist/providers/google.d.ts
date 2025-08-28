@@ -5,5 +5,5 @@ export declare class GoogleCache extends AIResponseCache {
     private googleAI;
     constructor(config?: CacheConfig, apiKey?: string);
     generateContent(params: GenerateContentRequest, modelName?: string): Promise<GenerateContentResult>;
-    private getCacheEntry;
+    protected getCacheEntry(key: string): Promise<import("../core/types.js").CacheEntry | null>;
 }

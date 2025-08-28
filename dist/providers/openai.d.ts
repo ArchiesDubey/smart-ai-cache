@@ -5,5 +5,5 @@ export declare class OpenAICache extends AIResponseCache {
     private openai;
     constructor(config?: CacheConfig, openaiOptions?: ConstructorParameters<typeof OpenAI>[0]);
     chatCompletion(params: OpenAI.ChatCompletionCreateParamsNonStreaming): Promise<OpenAI.ChatCompletion>;
-    private getCacheEntry;
+    protected getCacheEntry(key: string): Promise<import("../core/types.js").CacheEntry | null>;
 }

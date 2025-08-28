@@ -14,15 +14,16 @@ export class OpenAICache extends AIResponseCache {
         const { model, messages, ...rest } = params;
         return super.wrap(async () => {
             const response = await this.openai.chat.completions.create(params);
-            const entry = this.getCacheEntry(super.generateKey('openai', model, messages, rest));
-            if (entry && response.usage) {
+            let tokenCount = 0;
+            let cost = 0;
+            if (response.usage) {
                 const pricing = OPENAI_PRICING[model];
                 if (pricing) {
-                    entry.tokenCount = response.usage.total_tokens;
-                    entry.cost = response.usage.prompt_tokens * pricing.input + response.usage.completion_tokens * pricing.output;
+                    tokenCount = response.usage.total_tokens;
+                    cost = response.usage.prompt_tokens * pricing.input + response.usage.completion_tokens * pricing.output;
                 }
             }
-            return response;
+            return { value: response, tokenCount, cost };
         }, {
             provider: 'openai',
             model,
@@ -30,10 +31,8 @@ export class OpenAICache extends AIResponseCache {
             params: rest,
         });
     }
-    // A private helper to get a cache entry. This is a bit of a hack, but it's necessary
-    // to update the entry with token and cost information after the API call.
-    getCacheEntry(key) {
-        // @ts-ignore - accessing private member for internal use
-        return this.cache.get(key);
+    // Use the protected method to access storage entries
+    async getCacheEntry(key) {
+        return this.getStorageEntry(key);
     }
 }

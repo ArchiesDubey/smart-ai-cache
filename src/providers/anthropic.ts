@@ -43,8 +43,7 @@ export class AnthropicCache extends AIResponseCache {
     );
   }
 
-  private getCacheEntry(key: string) {
-    // @ts-ignore
-    return this.cache.get(key);
+  protected async getCacheEntry(key: string) {
+    return this.getStorageEntry(key);
   }
 }

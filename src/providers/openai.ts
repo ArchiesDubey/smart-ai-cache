@@ -44,10 +44,8 @@ export class OpenAICache extends AIResponseCache {
     );
   }
 
-  // A private helper to get a cache entry. This is a bit of a hack, but it's necessary
-  // to update the entry with token and cost information after the API call.
-  private getCacheEntry(key: string) {
-    // @ts-ignore - accessing private member for internal use
-    return this.cache.get(key);
+  // Use the protected method to access storage entries
+  protected async getCacheEntry(key: string) {
+    return this.getStorageEntry(key);
   }
 }
