@@ -47,8 +47,9 @@ export class AIResponseCache {
                     this.logError('All API call attempts failed, throwing error');
                     throw error;
                 }
-                // Exponential backoff
-                await this.sleep(Math.pow(2, attempt) * 1000);
+                // Exponential backoff (reduced for tests if debug mode)
+                const backoffMs = this.debug ? Math.pow(2, attempt) * 10 : Math.pow(2, attempt) * 1000;
+                await this.sleep(backoffMs);
             }
         }
         const endTime = Date.now();

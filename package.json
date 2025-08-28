@@ -1,27 +1,66 @@
 {
   "name": "smart-ai-cache",
-  "version": "1.0.5",
-  "description": "A lightweight, intelligent caching middleware for AI responses.",
+  "version": "1.0.6",
+  "description": "🚀 Lightning-fast AI response caching with Redis support. Reduce OpenAI/Claude/Gemini API costs by 40-80% with sub-millisecond cache lookups.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:coverage": "jest --coverage --coverageReporters=text-lcov | coveralls",
+    "test:watch": "npm test -- --watch",
     "build": "tsc",
-    "docs": "typedoc --out docs src/index.ts"
+    "benchmark": "npm run build && node benchmarks/performance.js",
+    "docs": "typedoc --out docs src/index.ts",
+     "lint": "eslint src/**/*.ts",
+     "lint:fix": "eslint src/**/*.ts --fix",
+    "prepack": "npm run build",
+    "precommit": "npm run lint && npm run test:coverage"
   },
   "keywords": [
     "ai",
-    "cache",
+    "cache", 
+    "caching",
     "openai",
     "anthropic",
+    "claude",
     "google",
     "gemini",
-    "claude",
-    "gpt"
+    "gpt",
+    "llm",
+    "redis",
+    "performance",
+    "cost-reduction",
+    "api-cache",
+    "middleware",
+    "typescript",
+    "nodejs",
+    "chatgpt",
+    "ai-tools",
+    "machine-learning"
   ],
-  "author": "",
+  "author": {
+    "name": "ArchiesDubey",
+    "url": "https://github.com/ArchiesDubey"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArchiesDubey/smart-ai-cache.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ArchiesDubey/smart-ai-cache/issues"
+  },
+  "homepage": "https://github.com/ArchiesDubey/smart-ai-cache#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md", 
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "devDependencies": {
     "@babel/preset-env": "^7.28.0",
     "@babel/preset-typescript": "^7.27.1",

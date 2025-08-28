@@ -68,6 +68,13 @@ describe('AIResponseCache', () => {
   });
 
   it('should handle API call errors with retry logic', async () => {
+    // Create cache with debug mode for faster backoff
+    const fastCache = new AIResponseCache({ ttl: 1, storage: 'memory', debug: true });
+    
+    // Mock console.error to reduce noise in tests
+    const originalConsoleError = console.error;
+    console.error = jest.fn();
+
     let callCount = 0;
     const fn = jest.fn().mockImplementation(() => {
       callCount++;
@@ -77,17 +84,32 @@ describe('AIResponseCache', () => {
       return Promise.resolve({ value: 'success', tokenCount: 0, cost: 0 });
     });
 
-    const result = await cache.wrap(fn, { provider: 'test', model: 'test-model' });
+    const result = await fastCache.wrap(fn, { provider: 'test', model: 'test-model' });
     
     expect(result).toBe('success');
     expect(fn).toHaveBeenCalledTimes(3); // 2 retries + 1 success
+
+    // Restore console.error
+    console.error = originalConsoleError;
+    await fastCache.disconnect();
   });
 
   it('should fail after max retries', async () => {
+    // Create cache with debug mode for faster backoff
+    const fastCache = new AIResponseCache({ ttl: 1, storage: 'memory', debug: true });
+    
+    // Mock console.error to reduce noise in tests
+    const originalConsoleError = console.error;
+    console.error = jest.fn();
+
     const fn = jest.fn().mockRejectedValue(new Error('Persistent API error'));
 
-    await expect(cache.wrap(fn, { provider: 'test', model: 'test-model' })).rejects.toThrow('Persistent API error');
+    await expect(fastCache.wrap(fn, { provider: 'test', model: 'test-model' })).rejects.toThrow('Persistent API error');
     expect(fn).toHaveBeenCalledTimes(3); // Max retries
+
+    // Restore console.error
+    console.error = originalConsoleError;
+    await fastCache.disconnect();
   });
 
   it('should support pattern-based cache invalidation', async () => {
@@ -108,10 +130,20 @@ describe('AIResponseCache', () => {
   });
 
   it('should handle cache storage errors gracefully', async () => {
+    // Mock console.error to reduce noise in tests
+    const originalConsoleError = console.error;
+    console.error = jest.fn();
+
     // Create a cache that will fail during storage operations
     const cacheWithRedis = new AIResponseCache({ 
       storage: 'redis', 
-      redisOptions: { host: 'invalid-host', port: 9999, connectTimeout: 100, lazyConnect: true }
+      redisOptions: { 
+        host: 'invalid-host', 
+        port: 9999, 
+        connectTimeout: 50,
+        lazyConnect: true,
+        maxRetriesPerRequest: 0
+      }
     });
 
     const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
@@ -123,7 +155,10 @@ describe('AIResponseCache', () => {
     expect(fn).toHaveBeenCalledTimes(1);
     
     await cacheWithRedis.disconnect();
-  }, 10000);
+
+    // Restore console.error
+    console.error = originalConsoleError;
+  }, 5000);
 
   it('should clear cache', async () => {
     const fn = jest.fn().mockResolvedValue({ value: 'response', tokenCount: 0, cost: 0 });
@@ -188,10 +223,24 @@ describe('AIResponseCache', () => {
     expect(stats.byProvider.test.costSaved).toBe(0.05);
   });
 
-  it('should handle empty redisOptions validation', () => {
-    expect(() => new AIResponseCache({ 
+  it('should handle empty redisOptions validation and fallback to memory', () => {
+    // Mock console.error to reduce noise in tests
+    const originalConsoleError = console.error;
+    console.error = jest.fn();
+
+    // Should create cache successfully but fall back to memory storage
+    const cacheWithEmptyRedis = new AIResponseCache({ 
       storage: 'redis', 
       redisOptions: {} 
-    })).toThrow('Redis options are required when using Redis storage');
+    });
+    
+    expect(cacheWithEmptyRedis).toBeDefined();
+    expect(console.error).toHaveBeenCalledWith(
+      '[AIResponseCache] Redis options are required when using Redis storage', 
+      undefined
+    );
+
+    // Restore console.error
+    console.error = originalConsoleError;
   });
 });
