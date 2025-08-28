@@ -1,6 +1,6 @@
 {
   "name": "smart-ai-cache",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "🚀 Lightning-fast AI response caching with Redis support. Reduce OpenAI/Claude/Gemini API costs by 40-80% with sub-millisecond cache lookups.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
