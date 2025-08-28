@@ -40,8 +40,10 @@ BRANCHING_STRATEGY.md
 # Security report (for local reference only)
 SECURITY_REPORT.md
 
-//Low-Devel-Design
+#Low-Devel-Design
 LLD.md
 
-//.DS_Store
+#.DS_Store
 .DS_Store
+
+promo/
