@@ -5,6 +5,13 @@ on:
     branches:
       - master
 
+# OIDC trusted publishing: no long-lived NPM token, immune to the 2FA OTP
+# prompt, and npm attaches provenance automatically. Requires a one-time
+# Trusted Publisher config on npmjs.com for this package (repo + workflow file).
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -17,6 +24,9 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm (OIDC trusted publishing needs npm >= 11.5.1)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -43,15 +53,8 @@ jobs:
             echo "::notice::$NAME@$VERSION not found on npm — proceeding to publish."
           fi
 
-      - name: Verify npm authentication
-        if: steps.version_check.outputs.already_published == 'false'
-        run: |
-          echo "Authenticated to npm as: $(npm whoami)"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to NPM
+      # No NODE_AUTH_TOKEN: npm >= 11.5.1 detects the GitHub OIDC environment and
+      # exchanges the id-token for a short-lived publish credential at publish time.
+      - name: Publish to NPM (OIDC trusted publishing)
         if: steps.version_check.outputs.already_published == 'false'
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
