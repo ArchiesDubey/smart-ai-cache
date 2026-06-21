@@ -1,6 +1,6 @@
 {
   "name": "smart-ai-cache",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "TypeScript-native semantic cache for LLM responses (OpenAI/Anthropic/Google). Sub-millisecond exact-match plus an optional zero-API-key semantic layer that serves paraphrased prompts. Memory or Redis.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
