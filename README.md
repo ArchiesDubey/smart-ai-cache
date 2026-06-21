@@ -522,8 +522,6 @@ download a model.
 | **3** | Tool-result + session-state cache tiers | planned |
 | **4** | OpenTelemetry (spans + metrics) | planned |
 
-Explicitly out of scope: a paid/SaaS tier, Python parity, and matching every
-competitor surface. MIT, depth over breadth.
 
 ---
 
