@@ -24,6 +24,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Test (unit + coverage gate)
+        run: npm test
+
+      - name: Smoke test (built dist artifact)
+        run: node scripts/smoke.mjs
+
       - name: Publish to NPM
         run: npm publish --access public
         env:

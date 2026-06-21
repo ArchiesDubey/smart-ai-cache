@@ -1,4 +1,4 @@
-import * as crypto from 'crypto-js';
+import crypto from 'crypto-js';
 
 function sortObject(obj: any): any {
   if (obj === null || typeof obj !== 'object') {

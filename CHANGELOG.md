@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-21
+
+### Added
+- **Semantic caching layer** (opt-in, off by default) — on an exact-match miss,
+  embeds the last user message and serves a cached response when cosine
+  similarity clears a configurable `threshold`. Backward compatible.
+- **Embedding providers**: `LocalEmbeddingProvider` (default, local, zero
+  API key via `@xenova/transformers`), `OpenAIEmbeddingProvider` (opt-in), and
+  `MockEmbeddingProvider` (deterministic, for tests/CI). Pluggable via the
+  `EmbeddingProvider` interface.
+- **Vector stores**: `MemoryVectorStore` (in-process brute-force cosine) and
+  `RedisVectorStore` (plain Redis — single hash, no RediSearch module required,
+  so one ordinary Redis backs both cache tiers). Pluggable via `VectorStore`;
+  auto-selected to match the `storage` backend.
+- **Accuracy controls** for the semantic failure mode: high default threshold
+  (0.95), per-call/per-route threshold override, and `logNearMisses` for tuning.
+- **`semanticHits` / `nearMisses`** in `getStats()`.
+- **CLI**: `npx smart-ai-cache setup` installs the local embedding model;
+  non-blocking, CI-safe postinstall notice recommending semantic caching.
+- **CI workflow** (`ci.yml`) running build, tests + coverage gate, and a
+  **smoke test against the built `dist/` artifact**; publish is now gated on the
+  same checks.
+
+### Fixed
+- **ESM crash on default cache keys**: `crypto-js` exposes `MD5` only on its
+  default export under Node ESM, but the key generator used a namespace import,
+  so every `wrap()` call with a generated key threw `crypto.MD5 is not a
+  function` in the published ESM build. Switched to a default import. (The jest
+  suite missed this because Babel applied an interop the real build does not —
+  hence the new dist smoke test.)
+
+### Changed
+- `@xenova/transformers` is an **optional peer dependency** (not auto-installed),
+  keeping the base install lean; only added when you enable local semantic
+  embeddings.
+- Repositioned package description and keywords toward "semantic"; dropped the
+  unqualified "40–80% savings" claim and scoped the footprint claim to the
+  exact-match path.
+
 ## [1.0.6] - 2024-08-28
 
 ### Added

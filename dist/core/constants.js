@@ -6,4 +6,5 @@ export const DEFAULT_CACHE_CONFIG = {
     keyPrefix: 'ai-cache:',
     enableStats: true,
     debug: false,
+    semantic: { enabled: false },
 };

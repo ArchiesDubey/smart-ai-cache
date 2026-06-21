@@ -4,232 +4,351 @@
 ![License](https://img.shields.io/npm/l/smart-ai-cache)
 ![Downloads](https://img.shields.io/npm/dm/smart-ai-cache)
 ![Build Status](https://img.shields.io/github/actions/workflow/status/ArchiesDubey/smart-ai-cache/ci.yml?branch=master)
-![Coverage](https://img.shields.io/badge/coverage-93.7%25-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen)
 
-A lightweight, intelligent caching middleware for AI responses, designed to reduce API costs and improve response times for repetitive LLM queries.
+**The TypeScript-native semantic cache for LLM responses.** A two-tier cache for
+OpenAI / Anthropic / Google calls: a sub-millisecond exact-match fast path, plus
+an optional **semantic layer** that also serves *paraphrased* prompts — using a
+local, **zero-API-key** embedding model by default.
 
-## Performance benchmarks
+```typescript
+const cache = new AIResponseCache({ semantic: { enabled: true } });
 
-**Exceeds all industry requirements:**
+// "How do I reset my password?" was cached earlier...
+// ...this paraphrase is served from cache, no API call:
+await cache.wrap(callLLM, {
+  provider: 'openai', model: 'gpt-4o',
+  prompt: [{ role: 'user', content: 'what are the steps to reset a password' }],
+});
+```
 
-| Metric | Target | Actual | Performance |
-|--------|--------|--------|------------|
-| Cache lookup | < 1ms | **0.0009ms** | 1,111x faster |
-| Memory usage | < 100MB | **2.86MB** | 35x more efficient |
-| Throughput | High | **451,842 req/s** | Exceptional |
+> **Why this exists:** GPTCache owns semantic caching in Python (it runs as a
+> sidecar). Nothing owns idiomatic `npm install` semantic caching in TypeScript.
+> That's the gap this fills — depth on the wedge, MIT, no SaaS.
+
+---
 
 ## Table of contents
 
-- [Purpose](#purpose)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Storage Options](#storage-options)
-  - [Memory Storage](#memory-storage)
-  - [Redis Storage](#redis-storage)
-- [Provider Examples](#provider-examples)
+- [How it works](#how-it-works)
+- [Install](#install)
+- [Quick start (exact-match)](#quick-start-exact-match)
+- [Semantic caching](#semantic-caching)
+  - [Enable it](#enable-it)
+  - [The accuracy trade-off](#the-accuracy-trade-off-the-important-part)
+  - [Cost & latency honesty](#cost--latency-honesty)
+  - [Embedding providers](#embedding-providers)
+  - [Vector stores (single Redis)](#vector-stores-one-redis-for-everything)
+  - [Tuning the threshold](#tuning-the-threshold)
+- [Storage options](#storage-options)
+- [Provider wrappers](#provider-wrappers)
 - [Configuration](#configuration)
+- [Statistics & monitoring](#statistics--monitoring)
 - [Performance](#performance)
-- [Migration Guide](#migration-guide)
-- [API Reference](#api-reference)
+- [Architecture & extensibility](#architecture--extensibility)
+- [Roadmap](#roadmap)
+- [Cache management](#cache-management)
+- [Error handling](#error-handling--reliability)
+- [Migration guide](#migration-guide)
+- [API reference](#api-reference)
 
-## Purpose
+---
 
-Smart AI Cache is a Node.js package that helps developers building AI applications reduce costs and improve response times. It caches responses from large language models to avoid redundant API calls.
+## How it works
 
-### What you get
-- **Lower costs**: Save 40-80% on repetitive AI API calls
-- **Better performance**: Sub-millisecond response times for cached queries  
-- **Simple setup**: Works out of the box with zero configuration
-- **Multiple providers**: Compatible with OpenAI, Anthropic Claude, and Google Gemini
-- **Production ready**: Built-in error handling, retries, and monitoring
+Two tiers behind one API. The semantic tier runs **only on an exact miss**, so
+the hot path never pays an embedding cost.
 
-## Installation
+```mermaid
+flowchart TD
+    A[wrap call] --> B{Exact key in cache?}
+    B -- hit --> R[Return cached value]
+    B -- miss --> C{semantic enabled?}
+    C -- no --> F[Call the LLM]
+    C -- yes --> D[Embed last user message]
+    D --> E{Top vector score >= threshold?}
+    E -- yes --> R2[Semantic hit: return stored value]
+    E -- no --> F
+    F --> G[Store value under exact key + index its embedding]
+    G --> H[Return value]
+```
+
+1. **Exact match** — MD5 of the normalized prompt + params. Sub-millisecond. No embedding cost.
+2. **Semantic match** (opt-in) — on an exact miss, embed the **last user message**, search the vector store, and return the stored response if the top cosine similarity clears `threshold`.
+3. **Full miss** — call the LLM, store the value under the exact key, and index its embedding (the exact key *is* the vector id) so future paraphrases hit.
+
+Semantic is **off by default** — adding it to an existing app is non-breaking.
+
+---
+
+## Install
 
 ```bash
 npm install smart-ai-cache
-# or
-yarn add smart-ai-cache
-# or  
-pnpm add smart-ai-cache
+# or: yarn add smart-ai-cache  /  pnpm add smart-ai-cache
 ```
 
-For Redis support (optional):
+The base install is exact-match only and dependency-light. Two **optional** add-ons:
+
 ```bash
-npm install smart-ai-cache ioredis
+# Semantic caching with the default local model (zero API key):
+npx smart-ai-cache setup        # installs @xenova/transformers for you
+
+# Redis storage (shared/persistent cache):
+npm install ioredis
 ```
 
-## Quick Start
+`@xenova/transformers` is an **optional peer dependency** — it is *not* pulled
+into every install. You only add it (via `setup`, or manually) if you enable
+semantic caching with the default local provider. If you bring your own
+embeddings (e.g. OpenAI), you don't need it at all.
 
-Here's how to get started:
+---
+
+## Quick start (exact-match)
 
 ```typescript
 import { AIResponseCache } from 'smart-ai-cache';
 import OpenAI from 'openai';
 
-// Initialize with zero configuration
-const cache = new AIResponseCache();
+const cache = new AIResponseCache();              // zero config
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const response = await cache.wrap(
-  () => openai.chat.completions.create({
-    model: 'gpt-4',
+const ask = () =>
+  openai.chat.completions.create({
+    model: 'gpt-4o',
     messages: [{ role: 'user', content: 'Hello, world!' }],
-  }),
-  { provider: 'openai', model: 'gpt-4' }
-);
+  });
 
-// First call hits the API, second call uses cache
-const cachedResponse = await cache.wrap(
-  () => openai.chat.completions.create({
-    model: 'gpt-4', 
-    messages: [{ role: 'user', content: 'Hello, world!' }],
-  }),
-  { provider: 'openai', model: 'gpt-4' }
-);
+await cache.wrap(ask, { provider: 'openai', model: 'gpt-4o' }); // hits API
+await cache.wrap(ask, { provider: 'openai', model: 'gpt-4o' }); // from cache
 
-// Check your savings
 const stats = cache.getStats();
-console.log(`Hit rate: ${stats.hitRate}%, Cost saved: $${stats.totalCostSaved}`);
+console.log(`Hit rate: ${stats.hitRate.toFixed(1)}%`);
 ```
 
-## Storage Options
+---
 
-### Memory Storage
+## Semantic caching
 
-**Default option** - Fast and simple, ideal for single-instance applications:
+Exact-match only helps when prompts are byte-for-byte identical. Real user
+traffic is full of paraphrases ("reset my password" vs "how do I change my
+password"). The semantic layer catches those.
+
+### Enable it
 
 ```typescript
 import { AIResponseCache } from 'smart-ai-cache';
 
 const cache = new AIResponseCache({
-  storage: 'memory',          // Default
-  maxSize: 1000,             // Max entries (default: 1000)
-  ttl: 3600,                 // 1 hour expiration (default)
+  semantic: { enabled: true },   // local model + in-memory vectors, zero API key
 });
 
-// Automatic LRU eviction when maxSize is exceeded
-// Sub-millisecond lookup times
-// Zero external dependencies
+// IMPORTANT: pass `prompt` so the cache has text to embed.
+const result = await cache.wrap(callLLM, {
+  provider: 'openai',
+  model: 'gpt-4o',
+  prompt: [{ role: 'user', content: 'how do I reset my password' }],
+});
 ```
 
-**Pros:** Fastest possible performance, no setup required  
-**Cons:** Not shared across instances, lost on restart
+> The semantic tier embeds the **last user message only** — system prompts and
+> prior history are deliberately excluded because they pollute similarity. For a
+> plain string `prompt`, the whole string is embedded.
 
-### Redis Storage  
+First run with the default provider downloads the model (`Xenova/all-MiniLM-L6-v2`,
+384-dim, ~23 MB) from the Hugging Face hub and caches it on disk. Run
+`npx smart-ai-cache setup` first if you haven't installed `@xenova/transformers`.
 
-**Production option** - Persistent, distributed caching:
+### The accuracy trade-off (the important part)
+
+Semantic caching can return a **confidently wrong answer**. *"What's the capital
+of France?"* and *"What's the capital of Germany?"* sit around **~0.9 cosine
+similarity** with most sentence-embedding models — close enough to wrongly share
+a cached answer if your threshold is too low. Set it too high and you get no
+hits. This is the core failure mode, and the library is designed around it:
+
+- **High default threshold — `0.95`.** Conservative on purpose: prefer a miss over a wrong hit.
+- **Per-call / per-route override** for endpoints where you know the risk profile.
+- **`logNearMisses`** surfaces queries that fell just below the line, so you tune from real traffic instead of guessing.
+
+This is the difference between "I wrapped a vector DB" and "I understood the
+failure mode."
+
+### Cost & latency honesty
+
+The two tiers have very different cost profiles — be clear-eyed about it:
+
+| Path | Latency | API key | Notes |
+|------|---------|---------|-------|
+| Exact-match hit | **sub-millisecond** | none | unchanged fast path |
+| Semantic hit (local) | **~10–50 ms warm** | none | first call is slower while the model loads (cold start) |
+| Semantic hit (OpenAI provider) | network round-trip | yes | one embedding call per lookup |
+
+So the semantic layer trades a small, real per-lookup cost for catching
+paraphrases the exact path would miss. Whether that's a win depends on your
+traffic — measure it (see [Statistics](#statistics--monitoring)).
+
+### Embedding providers
 
 ```typescript
-import { AIResponseCache } from 'smart-ai-cache';
+import {
+  AIResponseCache,
+  LocalEmbeddingProvider,   // default — local, zero API key
+  OpenAIEmbeddingProvider,  // opt-in — higher quality, needs a key
+} from 'smart-ai-cache';
 
+// Default (implicit):
+new AIResponseCache({ semantic: { enabled: true } });
+
+// Pick a different local model:
+new AIResponseCache({
+  semantic: { enabled: true, model: 'Xenova/all-MiniLM-L12-v2' },
+});
+
+// Use OpenAI embeddings (no @xenova/transformers needed):
+new AIResponseCache({
+  semantic: {
+    enabled: true,
+    provider: new OpenAIEmbeddingProvider({ apiKey: process.env.OPENAI_API_KEY }),
+  },
+});
+```
+
+Bring your own by implementing the interface:
+
+```typescript
+import { EmbeddingProvider } from 'smart-ai-cache';
+
+class MyEmbeddings implements EmbeddingProvider {
+  readonly id = 'my-embeddings';
+  async embed(text: string): Promise<number[]> {
+    /* call your model, return a vector */
+  }
+}
+
+new AIResponseCache({ semantic: { enabled: true, provider: new MyEmbeddings() } });
+```
+
+### Vector stores (one Redis for everything)
+
+The vector store is auto-selected to match your `storage` backend, so you never
+run two databases:
+
+| `storage` | Default vector store | What it means |
+|-----------|----------------------|----------------|
+| `'memory'` (default) | `MemoryVectorStore` | in-process, brute-force cosine |
+| `'redis'` | `RedisVectorStore` | **the same plain Redis** as the exact-match cache |
+
+`RedisVectorStore` uses **plain Redis** — vectors live in a single Redis hash and
+cosine is computed in Node. **No Redis Stack / RediSearch module required.** One
+ordinary Redis server (e.g. `redis:7-alpine`) backs both tiers:
+
+```typescript
 const cache = new AIResponseCache({
   storage: 'redis',
-  redisOptions: {
-    host: 'localhost',
-    port: 6379,
-    password: 'your-redis-password',    // If required
-    db: 0,                              // Redis database number
-    connectTimeout: 10000,              // Connection timeout
-    retryDelayOnFailover: 1000,        // Failover retry delay
-  },
-  keyPrefix: 'ai-cache:',              // Namespace your keys
-  ttl: 7200,                           // 2 hours
+  redisOptions: { host: 'localhost', port: 6379 },
+  semantic: { enabled: true },   // vectors persist in the same Redis, shared across instances
 });
-
-// Automatic fallback to memory storage if Redis fails
-// Shared across multiple application instances  
-// Survives application restarts
 ```
 
-**Pros:** Persistent, scalable, shared across instances  
-**Cons:** Requires Redis server, network latency
+It's brute-force (O(n) per lookup), which is fine for cache-sized working sets;
+swap in a native index later via the `VectorStore` interface if you outgrow it.
 
-#### Redis Production Setup
+### Tuning the threshold
 
-**Docker Compose:**
+```typescript
+const cache = new AIResponseCache({
+  semantic: {
+    enabled: true,
+    threshold: 0.95,        // global default
+    topK: 1,                // neighbours fetched per lookup
+    logNearMisses: true,    // log scores that fell just under threshold
+  },
+});
+
+// Per-call override — e.g. a stricter bar for a high-stakes route:
+await cache.wrap(callLLM, {
+  provider: 'openai', model: 'gpt-4o',
+  prompt: messages,
+  semantic: { threshold: 0.97 },
+});
+
+// Or disable semantic for one call even when globally on:
+await cache.wrap(callLLM, {
+  provider: 'openai', model: 'gpt-4o', prompt: messages,
+  semantic: { enabled: false },
+});
+```
+
+Turn on `logNearMisses`, watch `getStats().nearMisses` and the debug logs on
+real traffic, then lower/raise `threshold` deliberately.
+
+---
+
+## Storage options
+
+### Memory (default)
+
+```typescript
+const cache = new AIResponseCache({
+  storage: 'memory',   // default
+  maxSize: 1000,       // LRU eviction beyond this
+  ttl: 3600,           // seconds
+});
+```
+
+Fastest possible; not shared across instances; lost on restart.
+
+### Redis
+
+```typescript
+const cache = new AIResponseCache({
+  storage: 'redis',
+  redisOptions: { host: 'localhost', port: 6379, password: process.env.REDIS_PASSWORD },
+  keyPrefix: 'ai-cache:',
+  ttl: 7200,
+});
+```
+
+Persistent, shared across instances, with automatic fallback to memory if Redis
+is unavailable at startup. A single plain Redis serves both the exact-match and
+semantic tiers — see [Vector stores](#vector-stores-one-redis-for-everything).
+
 ```yaml
+# docker-compose.yml — plain Redis is all you need
 services:
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    ports: ["6379:6379"]
     command: redis-server --appendonly yes
-    environment:
-      - REDIS_PASSWORD=your-secure-password
-      
-  your-app:
-    build: .
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379  
-      - REDIS_PASSWORD=your-secure-password
-    depends_on:
-      - redis
-
+    volumes: [redis_data:/data]
 volumes:
   redis_data:
 ```
 
-**Environment Variables:**
-```bash
-# .env file
-REDIS_HOST=your-redis-host.com
-REDIS_PORT=6379
-REDIS_PASSWORD=your-secure-password
-REDIS_DB=0
-```
+---
 
-```typescript
-const cache = new AIResponseCache({
-  storage: 'redis',
-  redisOptions: {
-    host: process.env.REDIS_HOST,
-    port: parseInt(process.env.REDIS_PORT),
-    password: process.env.REDIS_PASSWORD,
-    db: parseInt(process.env.REDIS_DB || '0'),
-  },
-});
-```
+## Provider wrappers
 
-## Provider Examples
-
-The package includes specialized classes for each AI provider with automatic cost tracking:
+Typed wrappers per provider, with automatic token/cost tracking. They inherit
+the full config above (including `semantic`).
 
 ### OpenAI
 
 ```typescript
 import { OpenAICache } from 'smart-ai-cache';
 
-const cache = new OpenAICache({
-  ttl: 7200,                    // 2 hours
-  maxSize: 5000,               // 5K entries  
-  storage: 'redis',            // Use Redis
-  redisOptions: {
-    host: 'localhost',
-    port: 6379,
-  }
-});
+const cache = new OpenAICache({ storage: 'redis', redisOptions: { host: 'localhost', port: 6379 } });
 
-// Automatically handles OpenAI-specific response types
-const response = await cache.chatCompletion({
+const res = await cache.chatCompletion({
   model: 'gpt-4o',
   messages: [
     { role: 'system', content: 'You are a helpful assistant.' },
-    { role: 'user', content: 'Explain quantum computing in simple terms' }
+    { role: 'user', content: 'Explain quantum computing simply' },
   ],
-  temperature: 0.7,
-  max_tokens: 500,
 });
-
-console.log(response.choices[0].message.content);
-
-// Get OpenAI-specific analytics
-const stats = cache.getStats();
-console.log(`Cache hit rate: ${stats.hitRate}%`);
-console.log(`Cost saved: $${stats.totalCostSaved.toFixed(4)}`);
-console.log(`OpenAI requests: ${stats.byProvider.openai?.requests || 0}`);
+console.log(res.choices[0].message.content);
 ```
 
 ### Anthropic Claude
@@ -237,311 +356,272 @@ console.log(`OpenAI requests: ${stats.byProvider.openai?.requests || 0}`);
 ```typescript
 import { AnthropicCache } from 'smart-ai-cache';
 
-const cache = new AnthropicCache({
-  storage: 'memory',
-  maxSize: 2000,
-  ttl: 3600,
-});
-
-const response = await cache.messages({
+const cache = new AnthropicCache({ storage: 'memory' });
+const res = await cache.messages({
   model: 'claude-3-5-sonnet-20241022',
-  max_tokens: 1000, 
-  messages: [
-    { 
-      role: 'user', 
-      content: 'Write a Python function to calculate fibonacci numbers' 
-    }
-  ],
+  max_tokens: 1000,
+  messages: [{ role: 'user', content: 'Write a fibonacci function in Python' }],
 });
-
-console.log(response.content[0].text);
-
-// Claude-specific cost tracking
-const stats = cache.getStats();
-console.log(`Claude cost saved: $${stats.byProvider.anthropic?.costSaved || 0}`);
+console.log(res.content[0].text);
 ```
 
 ### Google Gemini
 
-```typescript 
+```typescript
 import { GoogleCache } from 'smart-ai-cache';
 
-const cache = new GoogleCache({
-  ttl: 1800,                   // 30 minutes
-  storage: 'redis',
-}, process.env.GOOGLE_API_KEY);
-
-const response = await cache.generateContent({
-  contents: [{ 
-    role: 'user', 
-    parts: [{ text: 'What are the benefits of renewable energy?' }] 
-  }],
-}, 'gemini-1.5-pro');
-
-console.log(response.response.text());
+const cache = new GoogleCache({ storage: 'redis' }, process.env.GOOGLE_API_KEY);
+const res = await cache.generateContent(
+  { contents: [{ role: 'user', parts: [{ text: 'Benefits of renewable energy?' }] }] },
+  'gemini-1.5-pro',
+);
+console.log(res.response.text());
 ```
+
+---
 
 ## Configuration
 
-Complete configuration options:
-
 ```typescript
 interface CacheConfig {
-  ttl?: number;                    // Time to live in seconds (default: 3600)
-  maxSize?: number;                // Maximum cache entries (default: 1000)
-  storage?: 'memory' | 'redis';    // Storage backend (default: 'memory')
-  redisOptions?: RedisOptions;     // Redis connection options 
-  keyPrefix?: string;              // Cache key prefix (default: 'ai-cache:')
-  enableStats?: boolean;           // Enable statistics tracking (default: true)
-  debug?: boolean;                 // Enable debug logging (default: false)
+  ttl?: number;                 // seconds (default: 3600)
+  maxSize?: number;             // memory LRU cap (default: 1000)
+  storage?: 'memory' | 'redis'; // default: 'memory'
+  redisOptions?: RedisOptions;  // ioredis options
+  keyPrefix?: string;           // default: 'ai-cache:'
+  enableStats?: boolean;        // default: true
+  debug?: boolean;              // default: false
+  semantic?: SemanticConfig;    // default: { enabled: false }
+}
+
+interface SemanticConfig {
+  enabled: boolean;             // default: false (backward compatible)
+  provider?: EmbeddingProvider; // default: LocalEmbeddingProvider
+  vectorStore?: VectorStore;    // default: Memory, or Redis when storage='redis'
+  threshold?: number;           // cosine similarity for a hit (default: 0.95)
+  topK?: number;                // neighbours per lookup (default: 1)
+  model?: string;               // local model id (default: 'Xenova/all-MiniLM-L6-v2')
+  logNearMisses?: boolean;      // log sub-threshold matches (default: false)
 }
 ```
 
-**Advanced Configuration:**
+---
+
+## Statistics & monitoring
 
 ```typescript
-const cache = new AIResponseCache({
-  ttl: 7200,                      // 2 hours expiration
-  maxSize: 10000,                 // 10K entries max
-  storage: 'redis',
-  redisOptions: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT) || 6379,
-    password: process.env.REDIS_PASSWORD,
-    db: 0,
-    connectTimeout: 10000,
-    retryDelayOnFailover: 1000,
-    maxRetriesPerRequest: 3,
-  },
-  keyPrefix: 'myapp:ai-cache:',   // Custom namespace
-  enableStats: true,              // Track performance metrics
-  debug: process.env.NODE_ENV === 'development',
-});
+const stats = cache.getStats();
+
+console.log(`Total requests : ${stats.totalRequests}`);
+console.log(`Cache hits     : ${stats.cacheHits} (${stats.hitRate.toFixed(1)}%)`);
+console.log(`  of which semantic: ${stats.semanticHits}`);
+console.log(`Near-misses    : ${stats.nearMisses}`);   // when logNearMisses is on
+console.log(`Cost saved     : $${stats.totalCostSaved.toFixed(4)}`);
+console.log(`Avg response   : ${stats.averageResponseTime.toFixed(2)} ms`);
+
+for (const [provider, p] of Object.entries(stats.byProvider)) {
+  console.log(`${provider}: ${p.hits}/${p.requests} hits, $${p.costSaved.toFixed(4)} saved`);
+}
+
+cache.resetStats();
 ```
+
+**Measuring savings honestly:** how much you save depends entirely on how
+repetitive and paraphrased your traffic is — there's no universal percentage.
+Exact duplicates avoid 100% of the repeat call; the semantic layer additionally
+catches paraphrases above your threshold. Use `semanticHits` / `hitRate` on a
+representative, paraphrase-heavy slice of your real traffic to get your number.
+
+---
 
 ## Performance
 
-Run the built-in benchmark to validate performance in your environment:
+Two commands, reproducible in your own environment:
 
 ```bash
-npm run benchmark
+npm run benchmark            # exact-match path (memory, throughput, eviction)
+npm run benchmark:semantic   # semantic vs non-semantic (needs the local model)
 ```
 
-**Sample Output:**
-```
-Cache lookup average: 0.94μs (0.0009ms)
-Memory used for 10,000 entries: 2.86MB  
-Throughput: 451,842 requests/secon
-```
+### Semantic vs non-semantic
 
-### Cache Management
+Measured locally with the default `Xenova/all-MiniLM-L6-v2` (384-dim) on an Apple
+Silicon laptop / Node 22, averaged over 200 lookups. **Your numbers will vary** —
+run it yourself.
 
-**Manual Cache Operations:**
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| Exact-match hit | **~0.012 ms** (~12 µs) | non-semantic fast path (incl. key hashing) |
+| Vector search only (1k entries) | ~1.1 ms | in-memory brute-force cosine |
+| Embedding only (local, warm) | ~3 ms | per lookup |
+| **Semantic lookup** (embed + search) | **~6 ms** | added cost on the semantic path |
+| Cold start (first call) | ~0.3 s | loading the on-disk model; **first-ever run downloads ~23 MB (several seconds)** |
+
+The exact-match path is **~500x faster** than the semantic path — but only the
+semantic path catches paraphrases. Both replace a full LLM round-trip (typically
+hundreds of ms to seconds), so a semantic hit at ~6 ms is still a large win over
+a real API call.
+
+### Reality check on similarity scores
+
+In the benchmark, two genuine paraphrases —
+
+> *"How do I reset my password?"* vs *"what are the steps to change my password"*
+
+— score a cosine similarity of **0.805**. That's **below the 0.95 default
+threshold**, so it would *not* hit out of the box. This is intentional: the
+default errs against false hits. Real paraphrases often land in the 0.75–0.90
+range, so **tune `threshold` on your own traffic** (use `logNearMisses`) rather
+than trusting a generic number. See [the accuracy trade-off](#the-accuracy-trade-off-the-important-part).
+
+---
+
+## Architecture & extensibility
+
+Every tier is a small, swappable interface — bring your own implementation:
 
 ```typescript
-// Check cache size
-const size = await cache.getCacheSize();
-console.log(`Cache contains ${size} entries`);
+interface StorageInterface {            // exact-match storage
+  get(key): Promise<CacheEntry | null>;
+  set(key, entry): Promise<void>;
+  delete(key): Promise<boolean>;
+  clear(): Promise<void>;
+  has(key): Promise<boolean>;
+  size(): Promise<number>;
+  keys(): Promise<string[]>;
+}
 
-// Clear specific entries by pattern
-const deleted = await cache.deleteByPattern('openai:gpt-4:*');
-console.log(`Deleted ${deleted} OpenAI GPT-4 entries`);
+interface EmbeddingProvider {           // text -> vector
+  readonly id: string;
+  embed(text: string): Promise<number[]>;
+}
 
-// Clear entire cache
-await cache.clear();
-
-// Delete specific key  
-const key = cache.generateKey('openai', 'gpt-4', prompt, params);
-await cache.delete(key);
-
-// Check if key exists
-const exists = await cache.has(key);
+interface VectorStore {                 // nearest-neighbour search
+  add(id, vector, meta?): Promise<void>;
+  search(vector, topK): Promise<{ id: string; score: number }[]>;
+  delete(id): Promise<void>;
+  clear(): Promise<void>;
+  size(): Promise<number>;
+}
 ```
 
-**Graceful Shutdown:**
+Bundled implementations: `MemoryStorage` / `RedisStorage`,
+`LocalEmbeddingProvider` / `OpenAIEmbeddingProvider` / `MockEmbeddingProvider`,
+`MemoryVectorStore` / `RedisVectorStore`. `MockEmbeddingProvider` and
+`cosineSimilarity` are exported so your own tests stay deterministic and never
+download a model.
+
+---
+
+## Roadmap
+
+| Phase | Scope | Status |
+|------:|-------|--------|
+| **1** | Semantic layer over the exact-match core | ✅ shipped |
+| **2** | Vercel AI SDK adapter | planned |
+| **3** | Tool-result + session-state cache tiers | planned |
+| **4** | OpenTelemetry (spans + metrics) | planned |
+
+Explicitly out of scope: a paid/SaaS tier, Python parity, and matching every
+competitor surface. MIT, depth over breadth.
+
+---
+
+## Cache management
 
 ```typescript
-process.on('SIGTERM', async () => {
-  await cache.disconnect(); // Closes Redis connections
-  process.exit(0);
-});
-```
+await cache.getCacheSize();
+await cache.deleteByPattern('*openai:gpt-4o:*');  // wildcard invalidation
+await cache.clear();                              // clears values AND semantic vectors
+await cache.delete(cache.generateKey('openai', 'gpt-4o', prompt, params));
+await cache.has(key);
 
-## Migration Guide
-
-### From v1.0.4 to v1.0.5+
-
-**Breaking Changes:**
-- Cache methods are now async (`clear()`, `delete()`, `has()`, `getCacheSize()`)
-- Provider classes no longer require passing client instances
-
-**Before:**
-```typescript
-// v1.0.4 and earlier
-const cache = new AIResponseCache();
-cache.clear();                    // Synchronous
-const size = cache.getCacheSize(); // Synchronous
-
-const openaiCache = new OpenAICache(config, openaiClient);
-```
-
-**After:**
-```typescript
-// v1.0.5+
-const cache = new AIResponseCache();  
-await cache.clear();                    // Async
-const size = await cache.getCacheSize(); // Async
-
-const openaiCache = new OpenAICache(config); // No client needed
-```
-
-**Migration Steps:**
-1. Add `await` to cache management operations
-2. Remove client instances from provider constructors  
-3. Update your error handling to use the new retry logic
-4. Consider upgrading to Redis for production deployments
-
-### Adding Redis to Existing Projects
-
-**Step 1: Install Redis dependency**
-```bash
-npm install ioredis
-```
-
-**Step 2: Update your cache configuration**
-```typescript
-// Before - Memory only
-const cache = new AIResponseCache({ ttl: 3600 });
-
-// After - Redis with fallback
-const cache = new AIResponseCache({
-  storage: 'redis',
-  redisOptions: {
-    host: process.env.REDIS_HOST || 'localhost', 
-    port: parseInt(process.env.REDIS_PORT) || 6379,
-  },
-  ttl: 3600,
-});
-```
-
-**Step 3: Add graceful shutdown**
-```typescript
+// Graceful shutdown — closes Redis (storage + vector store) connections:
 process.on('SIGTERM', async () => {
   await cache.disconnect();
   process.exit(0);
 });
 ```
 
-## Advanced Features
+---
 
-### Custom Key Generation
+## Error handling & reliability
 
-```typescript
-const cache = new AIResponseCache();
-
-// Generate custom cache keys
-const customKey = cache.generateKey('openai', 'gpt-4', prompt, params);
-
-// Use custom keys for manual cache management
-await cache.wrap(apiCall, {
-  provider: 'openai',
-  model: 'gpt-4', 
-  cacheKey: customKey
-});
-```
-
-### Statistics and Monitoring
+- Automatic retries with exponential backoff (3 attempts) on the wrapped call.
+- Graceful degradation: cache get/set errors fall through to the LLM rather than failing the request.
+- Semantic lookup errors (embedding/search) fall through to a normal miss — semantic never breaks a request.
+- Redis startup failure falls back to in-memory storage.
 
 ```typescript
-const stats = cache.getStats();
-
-console.log('Cache Performance:');
-console.log(`├─ Total Requests: ${stats.totalRequests}`);
-console.log(`├─ Cache Hits: ${stats.cacheHits} (${stats.hitRate.toFixed(1)}%)`);
-console.log(`├─ Cost Saved: $${stats.totalCostSaved.toFixed(4)}`);
-console.log(`└─ Avg Response Time: ${stats.averageResponseTime.toFixed(2)}ms`);
-
-// Provider-specific stats
-Object.entries(stats.byProvider).forEach(([provider, data]) => {
-  console.log(`${provider}: ${data.hits}/${data.requests} hits, $${data.costSaved.toFixed(4)} saved`);
-});
-
-// Reset statistics 
-cache.resetStats();
-```
-
-### Cache Invalidation Patterns
-
-```typescript
-// Delete all OpenAI GPT-4 entries
-await cache.deleteByPattern('*openai:gpt-4:*');
-
-// Delete all entries from a specific time period
-await cache.deleteByPattern(`*${today}*`);
-
-// Delete provider-specific entries
-await cache.deleteByPattern('*anthropic:*');
-```
-
-## Error handling and reliability
-
-The package handles errors automatically:
-
-- **Automatic retries** with exponential backoff (3 attempts)
-- **Graceful degradation** when cache storage fails
-- **Circuit breaker** pattern for Redis connection issues  
-- **Fallback to memory** when Redis is unavailable
-
-```typescript
-// Errors are handled automatically, but you can catch them
 try {
-  const response = await cache.wrap(apiCall, options);
+  const res = await cache.wrap(apiCall, options);
 } catch (error) {
-  console.error('API call failed after retries:', error);
-  // Your fallback logic here
+  // only thrown if the underlying LLM call fails after all retries
 }
 ```
 
-## API Reference
+---
 
-### Core Classes
+## Migration guide
 
-- `AIResponseCache` - Main caching class with storage abstraction
-- `OpenAICache` - OpenAI-specific wrapper with cost tracking
-- `AnthropicCache` - Anthropic Claude wrapper with cost tracking  
-- `GoogleCache` - Google Gemini wrapper
-- `MemoryStorage` - In-memory storage implementation
-- `RedisStorage` - Redis storage implementation
+### Adding semantic caching to an existing app
 
-### Key Methods
+It's additive and **non-breaking** — semantic is off until you opt in:
 
-- `wrap(fn, options)` - Cache a function call
-- `clear()` - Clear all cache entries
-- `delete(key)` - Delete specific entry
-- `deleteByPattern(pattern)` - Pattern-based deletion
-- `getStats()` - Get performance statistics
-- `disconnect()` - Close storage connections
+```typescript
+// before
+const cache = new AIResponseCache({ storage: 'redis', redisOptions });
 
-For complete API documentation, visit [TypeDoc documentation](https://archiesdubey.github.io/smart-ai-cache/).
+// after — same Redis, now catches paraphrases
+const cache = new AIResponseCache({ storage: 'redis', redisOptions, semantic: { enabled: true } });
+```
+Then run `npx smart-ai-cache setup` once (for the default local model), and make
+sure you pass `prompt` to `wrap()` so there's text to embed.
+
+### From v1.0.4 to v1.0.5+
+
+- Cache methods became async: `clear()`, `delete()`, `has()`, `getCacheSize()` — add `await`.
+- Provider classes no longer take a client instance: `new OpenAICache(config)`.
+
+---
+
+## API reference
+
+**Classes**
+`AIResponseCache` · `OpenAICache` · `AnthropicCache` · `GoogleCache` ·
+`MemoryStorage` · `RedisStorage` · `LocalEmbeddingProvider` ·
+`OpenAIEmbeddingProvider` · `MockEmbeddingProvider` · `MemoryVectorStore` ·
+`RedisVectorStore`
+
+**Helpers / types**
+`cosineSimilarity` · `EmbeddingProvider` · `VectorStore` · `VectorSearchResult` ·
+`StorageInterface` · `CacheConfig` · `SemanticConfig` · `CacheStats`
+
+**Key methods**
+`wrap(fn, options)` · `getStats()` · `resetStats()` · `clear()` · `delete(key)` ·
+`deleteByPattern(pattern)` · `has(key)` · `getCacheSize()` · `disconnect()`
+
+**CLI**
+`npx smart-ai-cache setup` — install the local embedding model ·
+`npx smart-ai-cache help`
+
+Full generated docs: [TypeDoc](https://archiesdubey.github.io/smart-ai-cache/).
+
+---
 
 ## Contributing
 
-We welcome contributions! Here's how to get started:
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)  
-3. Run tests (`npm test`)
-4. Run benchmarks (`npm run benchmark`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+1. Fork & branch (`git checkout -b feature/x`)
+2. `npm test` (deterministic — `MockEmbeddingProvider` keeps CI model-free)
+3. `npm run benchmark`
+4. Open a PR
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
 **Made with ❤️ for the AI developer community**
 
-[⭐ Star on GitHub](https://github.com/ArchiesDubey/smart-ai-cache) | [Documentation](https://archiesdubey.github.io/smart-ai-cache/) | [Report Issues](https://github.com/ArchiesDubey/smart-ai-cache/issues)
+[⭐ Star on GitHub](https://github.com/ArchiesDubey/smart-ai-cache) · [Docs](https://archiesdubey.github.io/smart-ai-cache/) · [Issues](https://github.com/ArchiesDubey/smart-ai-cache/issues)

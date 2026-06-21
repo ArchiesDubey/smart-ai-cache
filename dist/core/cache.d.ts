@@ -4,6 +4,12 @@ export declare class AIResponseCache {
     private config;
     private stats;
     private debug;
+    private semanticEnabled;
+    private embeddingProvider;
+    private vectorStore;
+    private semanticThreshold;
+    private semanticTopK;
+    private semanticLogNearMisses;
     constructor(config?: CacheConfig);
     wrap<T>(fn: () => Promise<{
         value: T;
@@ -16,6 +22,11 @@ export declare class AIResponseCache {
         ttl?: number;
         prompt?: any;
         params?: any;
+        /** Per-call semantic overrides (e.g. a looser/tighter threshold for one route). */
+        semantic?: {
+            enabled?: boolean;
+            threshold?: number;
+        };
     }): Promise<T>;
     getStats(): CacheStats;
     resetStats(): CacheStats;
@@ -27,6 +38,15 @@ export declare class AIResponseCache {
     private validateAndMergeConfig;
     private validateWrapOptions;
     private initializeStorage;
+    private initializeSemantic;
+    /**
+     * Pick the text to embed. We embed the last user message only — system
+     * prompts and prior history pollute similarity. Falls back sensibly for
+     * string prompts and plain objects.
+     */
+    private extractEmbedText;
+    private messageContentToText;
+    private updateSemanticHitStats;
     private initializeProviderStats;
     private updateCacheHitStats;
     private updateHitRate;

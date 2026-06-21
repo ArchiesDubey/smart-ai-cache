@@ -4,6 +4,11 @@ import { generateHashedKeyForPayload } from '../utils/key-generator.js';
 import { StorageInterface } from '../storage/redis-storage.js';
 import { MemoryStorage } from '../storage/memory-storage.js';
 import { RedisStorage } from '../storage/redis-storage.js';
+import { EmbeddingProvider } from '../embeddings/embedding-provider.js';
+import { LocalEmbeddingProvider } from '../embeddings/local.js';
+import { VectorStore } from '../vector/vector-store.js';
+import { MemoryVectorStore } from '../vector/memory-vector-store.js';
+import { RedisVectorStore } from '../vector/redis-vector-store.js';
 
 export class AIResponseCache {
   private storage: StorageInterface;
@@ -11,11 +16,20 @@ export class AIResponseCache {
   private stats: CacheStats;
   private debug: boolean;
 
+  // Semantic tier (only populated when config.semantic.enabled)
+  private semanticEnabled = false;
+  private embeddingProvider!: EmbeddingProvider;
+  private vectorStore!: VectorStore;
+  private semanticThreshold = 0.95;
+  private semanticTopK = 1;
+  private semanticLogNearMisses = false;
+
   constructor(config?: CacheConfig) {
     this.config = this.validateAndMergeConfig(config);
     this.debug = this.config.debug;
     this.stats = this.resetStats();
     this.storage = this.initializeStorage();
+    this.initializeSemantic();
   }
 
   async wrap<T>(
@@ -27,6 +41,8 @@ export class AIResponseCache {
       ttl?: number;
       prompt?: any;
       params?: any;
+      /** Per-call semantic overrides (e.g. a looser/tighter threshold for one route). */
+      semantic?: { enabled?: boolean; threshold?: number };
     }
   ): Promise<T> {
     this.validateWrapOptions(options);
@@ -48,6 +64,40 @@ export class AIResponseCache {
     } catch (error) {
       this.logError('Cache get error:', error);
       // Continue to API call on cache error
+    }
+
+    // Semantic tier — runs only on an exact miss, so the hot path stays
+    // sub-millisecond and pays no embedding cost. Embedding is computed once
+    // and reused for both the search here and the add() on a full miss.
+    let queryEmbedding: number[] | null = null;
+    const semanticOn = options.semantic?.enabled ?? this.semanticEnabled;
+    if (semanticOn && this.embeddingProvider && this.vectorStore) {
+      const text = this.extractEmbedText(options.prompt);
+      if (text) {
+        const threshold = options.semantic?.threshold ?? this.semanticThreshold;
+        try {
+          queryEmbedding = await this.embeddingProvider.embed(text);
+          const matches = await this.vectorStore.search(queryEmbedding, this.semanticTopK);
+          const top = matches[0];
+          if (top && top.score >= threshold) {
+            const entry = await this.storage.get(top.id);
+            if (entry) {
+              this.logDebug(`Semantic hit (score=${top.score.toFixed(4)}) for key: ${top.id}`);
+              this.updateSemanticHitStats(entry);
+              return entry.value;
+            }
+            // Vector pointed at an expired/evicted entry — fall through to miss.
+          } else if (top && this.semanticLogNearMisses) {
+            this.stats.nearMisses++;
+            this.logDebug(
+              `Semantic near-miss (score=${top.score.toFixed(4)} < threshold=${threshold}) for key: ${top.id}`
+            );
+          }
+        } catch (error) {
+          this.logError('Semantic lookup error:', error);
+          // Fall through to the normal miss path on any embedding/search error.
+        }
+      }
     }
 
     // Cache miss - call the original function with retry logic
@@ -103,6 +153,16 @@ export class AIResponseCache {
       // Don't throw on cache set error, just log it
     }
 
+    // Index the embedding so future paraphrases hit. The exact key is the
+    // vector id, so a later semantic hit maps straight back to this entry.
+    if (semanticOn && queryEmbedding && this.vectorStore) {
+      try {
+        await this.vectorStore.add(key, queryEmbedding);
+      } catch (error) {
+        this.logError('Vector store add error:', error);
+      }
+    }
+
     return value;
   }
 
@@ -115,6 +175,8 @@ export class AIResponseCache {
       totalRequests: 0,
       cacheHits: 0,
       cacheMisses: 0,
+      semanticHits: 0,
+      nearMisses: 0,
       hitRate: 0,
       totalCostSaved: 0,
       averageResponseTime: 0,
@@ -127,6 +189,9 @@ export class AIResponseCache {
   async clear(): Promise<void> {
     try {
       await this.storage.clear();
+      if (this.semanticEnabled && this.vectorStore) {
+        await this.vectorStore.clear();
+      }
       this.logDebug('Cache cleared successfully');
     } catch (error) {
       this.logError('Cache clear error:', error);
@@ -215,6 +280,82 @@ export class AIResponseCache {
     }
   }
 
+  private initializeSemantic(): void {
+    const sem = this.config.semantic;
+    this.semanticEnabled = !!sem?.enabled;
+    if (!this.semanticEnabled) return;
+
+    this.semanticThreshold = sem.threshold ?? 0.95;
+    this.semanticTopK = sem.topK ?? 1;
+    this.semanticLogNearMisses = sem.logNearMisses ?? false;
+    this.embeddingProvider = sem.provider ?? new LocalEmbeddingProvider({ model: sem.model });
+    // Default the vector store to match the cache's storage backend, so a
+    // Redis-backed cache keeps semantic vectors on the same single Redis.
+    this.vectorStore =
+      sem.vectorStore ??
+      (this.config.storage === 'redis'
+        ? new RedisVectorStore({ redisOptions: this.config.redisOptions })
+        : new MemoryVectorStore());
+    this.logDebug(
+      `Semantic tier enabled (provider=${this.embeddingProvider.id}, threshold=${this.semanticThreshold})`
+    );
+  }
+
+  /**
+   * Pick the text to embed. We embed the last user message only — system
+   * prompts and prior history pollute similarity. Falls back sensibly for
+   * string prompts and plain objects.
+   */
+  private extractEmbedText(prompt: any): string | null {
+    if (prompt == null) return null;
+    if (typeof prompt === 'string') return prompt.trim() || null;
+
+    if (Array.isArray(prompt)) {
+      for (let i = prompt.length - 1; i >= 0; i--) {
+        const msg = prompt[i];
+        if (msg && (msg.role === 'user' || msg.role === undefined)) {
+          const text = this.messageContentToText(msg.content ?? msg);
+          if (text) return text;
+        }
+      }
+      const last = prompt[prompt.length - 1];
+      return last ? this.messageContentToText(last.content ?? last) : null;
+    }
+
+    if (typeof prompt === 'object') {
+      if (typeof prompt.content === 'string') return prompt.content.trim() || null;
+      return JSON.stringify(prompt);
+    }
+    return String(prompt);
+  }
+
+  private messageContentToText(content: any): string | null {
+    if (content == null) return null;
+    if (typeof content === 'string') return content.trim() || null;
+    // OpenAI multimodal: array of parts; concatenate the text parts.
+    if (Array.isArray(content)) {
+      const parts = content
+        .map((p) => (typeof p === 'string' ? p : typeof p?.text === 'string' ? p.text : ''))
+        .filter(Boolean);
+      const joined = parts.join(' ').trim();
+      return joined || null;
+    }
+    if (typeof content === 'object' && typeof content.text === 'string') {
+      return content.text.trim() || null;
+    }
+    return null;
+  }
+
+  private updateSemanticHitStats(entry: CacheEntry): void {
+    this.stats.cacheHits++;
+    this.stats.semanticHits++;
+    this.stats.totalCostSaved += entry.cost;
+    this.initializeProviderStats(entry.provider);
+    this.stats.byProvider[entry.provider].hits++;
+    this.stats.byProvider[entry.provider].costSaved += entry.cost;
+    this.updateHitRate();
+  }
+
   private initializeProviderStats(provider: string): void {
     if (!this.stats.byProvider[provider]) {
       this.stats.byProvider[provider] = {
@@ -288,6 +429,11 @@ export class AIResponseCache {
     try {
       if (this.storage instanceof RedisStorage) {
         await (this.storage as RedisStorage).disconnect();
+      }
+      // Close the vector store's own connection if it owns one (e.g. RedisVectorStore).
+      const vectorStore = this.vectorStore as { disconnect?: () => Promise<void> } | undefined;
+      if (vectorStore && typeof vectorStore.disconnect === 'function') {
+        await vectorStore.disconnect();
       }
       this.logDebug('Storage disconnected successfully');
     } catch (error) {
